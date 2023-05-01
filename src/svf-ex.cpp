@@ -32,18 +32,14 @@
 #include "SVF-LLVM/SVFIRBuilder.h"
 #include "Util/Options.h"
 
-using namespace llvm;
-using namespace std;
 using namespace SVF;
+using namespace SVFUtil;
 
 int main(int argc, char ** argv)
 {
-
-    int arg_num = 0;
-    char **arg_value = new char*[argc];
     std::vector<std::string> moduleNameVec;
     moduleNameVec = OptionBase::parseOptions(
-            arg_num, arg_value, "SVF Example", "[options] <input-bitcode...>"
+            argc, argv, "SVF Example", "[options] <input-bitcode...>"
     );
 
     SVFModule* svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(moduleNameVec);
