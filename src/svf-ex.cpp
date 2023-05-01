@@ -35,6 +35,66 @@
 using namespace SVF;
 using namespace SVFUtil;
 
+
+/*!
+ * Given an actual out/ret SVFGNode, compute its reachable actual in/param SVFGNodes
+ * @param src
+ * @param outToIns 
+ */
+void computeOutToIns(const SVFGNode *src, Map<const SVFGNode *, Set<const SVFGNode *>> &outToIns) {
+    if(outToIns.count(src)) return;
+
+    FIFOWorkList<const SVFGNode*> workList;
+    Set<const SVFGNode*> visited;
+
+    u32_t callSiteID;
+    Set<const SVFGNode*> ins;
+    for (const auto &inEdge: src->getInEdges()) {
+        workList.push(inEdge->getSrcNode());
+        visited.insert(inEdge->getSrcNode());
+        if (const RetDirSVFGEdge *retEdge = SVFUtil::dyn_cast<RetDirSVFGEdge>(inEdge)) {
+            callSiteID = retEdge->getCallSiteId();
+        } else if (const RetIndSVFGEdge *retEdge = SVFUtil::dyn_cast<RetIndSVFGEdge>(inEdge)) {
+            callSiteID = retEdge->getCallSiteId();
+        } else {
+            assert(false && "return edge does not have a callsite ID?");
+        }
+    }
+
+    while (!workList.empty()) {
+        const SVFGNode *cur = workList.pop();
+        if (SVFUtil::isa<FormalINSVFGNode>(cur) || SVFUtil::isa<FormalParmVFGNode>(cur)) {
+            for (const auto &inEdge: cur->getInEdges()) {
+                if (const CallDirSVFGEdge *callEdge = SVFUtil::dyn_cast<CallDirSVFGEdge>(inEdge)) {
+                    if (callSiteID == callEdge->getCallSiteId()) ins.insert(callEdge->getSrcNode());
+                } else if (const CallIndSVFGEdge *callEdge = SVFUtil::dyn_cast<CallIndSVFGEdge>(inEdge)) {
+                    if (callSiteID == callEdge->getCallSiteId()) ins.insert(callEdge->getSrcNode());
+                } else {
+                    assert(false && "call edge does not have a callsite ID?");
+                }
+            }
+            continue;
+        }
+        if (SVFUtil::isa<ActualOUTSVFGNode>(cur) || SVFUtil::isa<ActualRetVFGNode>(cur)) {
+            computeOutToIns(cur, outToIns);
+            for (const auto &in: outToIns[cur]) {
+                if (!visited.count(in)) {
+                    visited.insert(in);
+                    workList.push(in);
+                }
+            }
+            continue;
+        }
+        for (const auto &inEdge: cur->getInEdges()) {
+            if (inEdge->getSrcNode()->getFun() == cur->getFun() && !visited.count(inEdge->getSrcNode())) {
+                visited.insert(inEdge->getSrcNode());
+                workList.push(inEdge->getSrcNode());
+            }
+        }
+    }
+    outToIns[src] = ins;
+
+}
 int main(int argc, char ** argv)
 {
     std::vector<std::string> moduleNameVec;
@@ -60,6 +120,15 @@ int main(int argc, char ** argv)
     /// Sparse value-flow graph (SVFG)
     SVFGBuilder svfBuilder;
     SVFG* svfg = svfBuilder.buildFullSVFG(ander);
+    svfg->dump("SVFG");
+
+    Map<const SVFGNode*, Set<const SVFGNode*>> outToIns;
+
+    for (const auto &it: *svfg) {
+        if (SVFUtil::isa<ActualOUTSVFGNode>(it.second) || SVFUtil::isa<ActualRetVFGNode>(it.second)) {
+            computeOutToIns(it.second, outToIns);
+        }
+    }
 
     AndersenWaveDiff::releaseAndersenWaveDiff();
     SVFIR::releaseSVFIR();
