@@ -31,104 +31,71 @@
 #include "WPA/Andersen.h"
 #include "SVF-LLVM/SVFIRBuilder.h"
 #include "Util/Options.h"
+#include "sstream"
+#include "fstream"
 
 using namespace SVF;
 using namespace SVFUtil;
+using namespace std;
 
+void computePts(SVFIR *svfir, Andersen *ander, const string &moduleName) {
 
-/*!
- * Given an actual out/ret SVFGNode, compute its reachable actual in/param SVFGNodes
- * @param src
- * @param outToIns 
- */
-void computeOutToIns(const SVFGNode *src, Map<const SVFGNode *, Set<const SVFGNode *>> &outToIns) {
-    if(outToIns.count(src)) return;
-
-    FIFOWorkList<const SVFGNode*> workList;
-    Set<const SVFGNode*> visited;
-
-    u32_t callSiteID;
-    Set<const SVFGNode*> ins;
-    for (const auto &inEdge: src->getInEdges()) {
-        workList.push(inEdge->getSrcNode());
-        visited.insert(inEdge->getSrcNode());
-        if (const RetDirSVFGEdge *retEdge = SVFUtil::dyn_cast<RetDirSVFGEdge>(inEdge)) {
-            callSiteID = retEdge->getCallSiteId();
-        } else if (const RetIndSVFGEdge *retEdge = SVFUtil::dyn_cast<RetIndSVFGEdge>(inEdge)) {
-            callSiteID = retEdge->getCallSiteId();
-        } else {
-            assert(false && "return edge does not have a callsite ID?");
+    OrderedMap<u32_t, u32_t> ptsSzToNum;
+    for (const auto &item: *svfir) {
+        u32_t ct = ander->getPts(item.first).count();
+        if (ct > 0) {
+            if (!ptsSzToNum.count(ct)) ptsSzToNum[ct] = 0;
+            ptsSzToNum[ct]++;
         }
     }
-
-    while (!workList.empty()) {
-        const SVFGNode *cur = workList.pop();
-        if (SVFUtil::isa<FormalINSVFGNode>(cur) || SVFUtil::isa<FormalParmVFGNode>(cur)) {
-            for (const auto &inEdge: cur->getInEdges()) {
-                if (const CallDirSVFGEdge *callEdge = SVFUtil::dyn_cast<CallDirSVFGEdge>(inEdge)) {
-                    if (callSiteID == callEdge->getCallSiteId()) ins.insert(callEdge->getSrcNode());
-                } else if (const CallIndSVFGEdge *callEdge = SVFUtil::dyn_cast<CallIndSVFGEdge>(inEdge)) {
-                    if (callSiteID == callEdge->getCallSiteId()) ins.insert(callEdge->getSrcNode());
-                } else {
-                    assert(false && "call edge does not have a callsite ID?");
-                }
-            }
-            continue;
-        }
-        if (SVFUtil::isa<ActualOUTSVFGNode>(cur) || SVFUtil::isa<ActualRetVFGNode>(cur)) {
-            computeOutToIns(cur, outToIns);
-            for (const auto &in: outToIns[cur]) {
-                if (!visited.count(in)) {
-                    visited.insert(in);
-                    workList.push(in);
-                }
-            }
-            continue;
-        }
-        for (const auto &inEdge: cur->getInEdges()) {
-            if (inEdge->getSrcNode()->getFun() == cur->getFun() && !visited.count(inEdge->getSrcNode())) {
-                visited.insert(inEdge->getSrcNode());
-                workList.push(inEdge->getSrcNode());
-            }
-        }
+    std::string str;
+    stringstream ss(str);
+    for (const auto &it: ptsSzToNum) {
+        ss << it.first << "," << it.second << "\n";
     }
-    outToIns[src] = ins;
+    cout << ss.str();
 
+    // Open a file in output mode (std::ios::out)
+    std::fstream file(moduleName + ".pts", std::ios::out);
+
+    if (!file.is_open()) {
+        std::cout << "Error opening the file!" << std::endl;
+        return;
+    }
+
+    // Write data to the file
+    file << ss.str();
+
+    // Close the file
+    file.close();
+
+    std::cout << "Data has been written to " << moduleName + ".pts" << std::endl;
 }
-int main(int argc, char ** argv)
-{
+
+int main(int argc, char **argv) {
     std::vector<std::string> moduleNameVec;
     moduleNameVec = OptionBase::parseOptions(
             argc, argv, "SVF Example", "[options] <input-bitcode...>"
     );
 
-    SVFModule* svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(moduleNameVec);
+    SVFModule *svfModule = LLVMModuleSet::getLLVMModuleSet()->buildSVFModule(moduleNameVec);
 
     /// Build Program Assignment Graph (SVFIR)
     SVFIRBuilder builder(svfModule);
-    SVFIR* pag = builder.build();
+    SVFIR *pag = builder.build();
 
     /// Create Andersen's pointer analysis
-    Andersen* ander = AndersenWaveDiff::createAndersenWaveDiff(pag);
+    Andersen *ander = AndersenWaveDiff::createAndersenWaveDiff(pag);
 
     /// Call Graph
-    PTACallGraph* callgraph = ander->getPTACallGraph();
+    PTACallGraph *callgraph = ander->getPTACallGraph();
 
     /// ICFG
-    ICFG* icfg = pag->getICFG();
+    ICFG *icfg = pag->getICFG();
+    icfg->updateCallGraph(callgraph);
+    builder.updateCallGraph(callgraph);
 
-    /// Sparse value-flow graph (SVFG)
-    SVFGBuilder svfBuilder;
-    SVFG* svfg = svfBuilder.buildFullSVFG(ander);
-    svfg->dump("SVFG");
-
-    Map<const SVFGNode*, Set<const SVFGNode*>> outToIns;
-
-    for (const auto &it: *svfg) {
-        if (SVFUtil::isa<ActualOUTSVFGNode>(it.second) || SVFUtil::isa<ActualRetVFGNode>(it.second)) {
-            computeOutToIns(it.second, outToIns);
-        }
-    }
+    computePts(pag, ander, svfModule->getModuleIdentifier());
 
     AndersenWaveDiff::releaseAndersenWaveDiff();
     SVFIR::releaseSVFIR();
